@@ -1,9 +1,15 @@
 import os
 import numpy as np
-import moviepy.editor as mvp
 from moviepy.video.io.ffmpeg_writer import FFMPEG_VideoWriter
 
 os.environ['FFMPEG_BINARY'] = 'ffmpeg'
+
+# Optional import for Jupyter notebook display
+try:
+    import moviepy.editor as mvp
+    HAS_MOVIEPY_EDITOR = True
+except ImportError:
+    HAS_MOVIEPY_EDITOR = False
 
 
 class VideoWriter:
@@ -38,4 +44,11 @@ class VideoWriter:
     def show(self, **kw):
         self.close()
         fn = self.params['filename']
-        display(mvp.ipython_display(fn, **kw))
+        if HAS_MOVIEPY_EDITOR:
+            try:
+                display(mvp.ipython_display(fn, **kw))
+            except NameError:
+                # display() is not available outside Jupyter
+                print(f"Video saved to: {fn}")
+        else:
+            print(f"Video saved to: {fn}")

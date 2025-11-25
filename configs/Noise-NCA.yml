@@ -41,6 +41,7 @@ model:
                   veined_0141: 0.25,
                   calm_water_4: 0.25,
                   smoke_plume_1: 1.00,
+                  blue_spiral.jpeg: 0.25,
   } # We found these noise levels to work well for the given textures.
   attr:
     chn: 12

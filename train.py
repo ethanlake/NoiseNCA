@@ -41,13 +41,29 @@ def main(config):
     if wandb_enabled:
         wandb.login(key=config['wandb']['key'], relogin=True)
 
-    device = torch.device(config['device'])
+    # Auto-detect device: use CUDA if available, otherwise fall back to CPU
+    requested_device = config.get('device', 'cuda:0')
+    if 'cuda' in requested_device.lower() and not torch.cuda.is_available():
+        print(f"Warning: CUDA requested but not available. Falling back to CPU.")
+        device = torch.device('cpu')
+    else:
+        device = torch.device(requested_device)
+    
     config['loss']['attr']['device'] = device
     config['model']['attr']['device'] = device
     loss_fn = TextureLoss(**config['loss']['attr']).to(device)
 
-    data_dir = config['data_dir']
-    image_paths = [f"{data_dir}/{f}" for f in os.listdir(data_dir)]
+    data_path = config['data_dir']
+    
+    # Check if data_path is a file or directory
+    if os.path.isfile(data_path):
+        # Single image file: train only on this file
+        image_paths = [data_path]
+    elif os.path.isdir(data_path):
+        # Directory: train on all files in directory (original behavior)
+        image_paths = [f"{data_path}/{f}" for f in os.listdir(data_path)]
+    else:
+        raise ValueError(f"data_dir must be either a file or directory: {data_path}")
 
     for idx, url in enumerate(image_paths):
         if "ipynb" in url:
@@ -76,7 +92,9 @@ def main(config):
 
         nca = get_nca_model(config, texture_name).to(device)
 
-        opt = torch.optim.Adam(nca.parameters(), config['training']['lr'], capturable=True)
+        # capturable=True only works with CUDA devices, so set based on device type
+        capturable = device.type == 'cuda'
+        opt = torch.optim.Adam(nca.parameters(), config['training']['lr'], capturable=capturable)
 
         lr_sched = None
         if 'type' not in config['training']['scheduler'] or config['training']['scheduler']['type'] == 'MultiStep':
