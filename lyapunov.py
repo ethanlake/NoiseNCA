@@ -289,10 +289,10 @@ def run_lyapunov_analysis(model, device, height, width, dx, dy, dt,
 
 def main():
     parser = argparse.ArgumentParser(description='Lyapunov exponent analysis for NCA models')
-    parser.add_argument('--model_type', type=str, required=True,
+    parser.add_argument('--model_type', type=str, default='Noise-NCA',
                         choices=['Noise-NCA', 'PE-NCA', 'Vanilla-NCA'],
                         help='Type of model (Noise-NCA, PE-NCA, or Vanilla-NCA)')
-    parser.add_argument('--texture', type=str, required=True,
+    parser.add_argument('--texture', type=str, default='spiralled_0124',
                         help='Texture name (e.g., spiralled_0124, bubbly_0101, etc.)')
     parser.add_argument('--height', type=int, default=128,
                         help='Grid height (default: 128)')
@@ -310,8 +310,8 @@ def main():
                         help='Time to evolve after perturbation (default: 200.0)')
     parser.add_argument('--radius', type=float, default=10.0,
                         help='Radius of circular perturbation (default: 5.0)')
-    parser.add_argument('--noise_strength', type=float, default=.2,
-                        help='Strength of noise in perturbation (default: 0.1)')
+    parser.add_argument('--noise_strength', type=float, default=1.,
+                        help='Strength of noise in perturbation (default: 1)')
     parser.add_argument('--n_runs', type=int, default=2,
                         help='Number of independent runs to average over (default: 10)')
     parser.add_argument('--show_realtime', action='store_true',
@@ -393,14 +393,14 @@ def main():
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     
-    # Save plot
-    if args.output is None:
-        output_file = f"lyapunov_{args.model_type}_{args.texture}_r{args.radius}_n{args.n_runs}.png"
-    else:
-        output_file = args.output
-    
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
-    print(f"\nPlot saved to: {output_file}")
+    # Save plot (disabled)
+    # if args.output is None:
+    #     output_file = f"lyapunov_{args.model_type}_{args.texture}_r{args.radius}_n{args.n_runs}.png"
+    # else:
+    #     output_file = args.output
+    # 
+    # plt.savefig(output_file, dpi=150, bbox_inches='tight')
+    # print(f"\nPlot saved to: {output_file}")
     
     # Display plot in window
     print("Displaying plot. Close the window to exit.")

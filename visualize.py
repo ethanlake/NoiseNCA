@@ -242,7 +242,7 @@ def compute_Sr(img):
 
 
 def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=False, show_grayscale=False, 
-                         structure_fact=None, noise_strength=0.0, show_entropy=False):
+                         structure_fact=None, noise_strength=0.0, show_entropy=False, hidden_channel=None):
     """
     Visualize NCA dynamics with varying dt (time step) using matplotlib.
     Similar to the "#@title Varying dt" block in the notebook.
@@ -251,22 +251,47 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
         show_fft: If True, display power spectrum (FFT of autocorrelation) in a separate plot
         show_grayscale: If True, display grayscale image used for FFT computation
         structure_fact: If 'Sq', show S(q) plot below FFT. If 'Sr', show S(r) plot below FFT. If None, show neither.
-        noise_strength: If > 0, add noise to RGB values after each update. Noise is drawn from [-0.5*ep, +0.5*ep] where ep is noise_strength.
+        noise_strength: If > 0, add noise to all channel values (RGB + hidden) after each update. Noise is drawn from [-0.5*ep, +0.5*ep] where ep is noise_strength.
         show_entropy: If True, compute and display compressed file size (entropy proxy) every 5 frames.
+        hidden_channel: If specified (0-indexed from first hidden channel), display that hidden channel as grayscale. None to disable.
     """
     model = model.to(device)
     model.eval()
+    
+    # Get number of channels and hidden channels
+    total_channels = model.chn
+    num_hidden_channels = total_channels - 3  # RGB channels are first 3
+    
+    # Validate hidden_channel if specified
+    if hidden_channel is not None:
+        if show_fft:
+            print(f"Warning: Hidden channel visualization is only available in real-space (not with FFT). Ignoring --hidden_channel.")
+            hidden_channel_idx = None
+            # Don't modify hidden_channel here, let the show_hidden logic handle it
+        elif hidden_channel < 0 or hidden_channel >= num_hidden_channels:
+            raise ValueError(f"hidden_channel must be between 0 and {num_hidden_channels - 1} (inclusive). "
+                           f"Model has {total_channels} total channels ({num_hidden_channels} hidden channels).")
+        else:
+            # Convert to absolute channel index (hidden channels start at index 3)
+            hidden_channel_idx = hidden_channel + 3
+            print(f"Displaying hidden channel {hidden_channel} (absolute index {hidden_channel_idx})")
+            print(f"Model has {total_channels} total channels ({num_hidden_channels} hidden channels)")
+    else:
+        hidden_channel_idx = None
     
     # Setup matplotlib figure with subplots
     plt.ion()  # Turn on interactive mode
     
     # Determine number of plots and which ones to show
-    show_rgb = not show_grayscale  # Don't show RGB if grayscale is enabled
+    # Hidden channel only shown in real-space (not with FFT), and shows RGB + hidden channel side-by-side
+    show_hidden = hidden_channel is not None and not show_fft  # Only show hidden channel in real-space
+    show_rgb = not show_grayscale  # Show RGB unless grayscale is enabled (hidden channel doesn't replace RGB)
     show_S_plot = structure_fact is not None and show_fft  # Only show S(q)/S(r) if FFT is also shown
     
     # Setup subplot layout
     if show_fft and show_S_plot:
         # Use 1x3 horizontal layout: image, FFT, S(q)/S(r) side by side
+        # Note: hidden channel is NOT shown with FFT
         zoomed_height = height * 2
         zoomed_width = width * 2
         aspect_ratio = zoomed_width / zoomed_height
@@ -282,7 +307,7 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
         
         fig, (ax1, ax2, ax_S) = plt.subplots(1, 3, figsize=(fig_width, fig_height))
         
-        # Left plot - RGB or Grayscale
+        # Left plot - RGB or Grayscale (no hidden channel with FFT)
         if show_rgb:
             ax1.set_title(f'NCA Visualization (dt={dt})', fontsize=14)
         else:  # show_grayscale
@@ -307,38 +332,14 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
         
         ax3 = None
     else:
-        # Original layout without S(q)/S(r)
-        num_plots = (1 if show_rgb else 0) + (1 if show_grayscale else 0) + (1 if show_fft else 0)
-        
-        if num_plots == 1:
-            # Single plot
+        # Layout without S(q)/S(r)
+        # Special case: if hidden channel is shown, always show RGB + hidden channel side-by-side
+        if show_hidden:
+            # RGB + Hidden Channel side-by-side (real-space only, no FFT)
             zoomed_height = height * 2
             zoomed_width = width * 2
             aspect_ratio = zoomed_width / zoomed_height
             
-            # Calculate figure dimensions to match plot aspect ratio
-            plot_height = 8  # Base height in inches
-            plot_width = plot_height * aspect_ratio  # Width for the plot
-            
-            fig, ax1 = plt.subplots(figsize=(plot_width + 0.5, plot_height + 1.5))
-            if show_rgb:
-                ax1.set_title(r'${\sf image}$', fontsize=14)
-            elif show_grayscale:
-                ax1.set_title(r'${\sf image}$', fontsize=14)
-            else:  # show_fft only (shouldn't happen, but handle it)
-                ax1.set_title(fr'$|S(\mathbf{q})|^2$', fontsize=14)
-            ax1.axis('off')
-            ax1.set_aspect('equal')
-            ax2 = None
-            ax3 = None
-            ax_S = None
-        elif num_plots == 2:
-            # Two plots
-            zoomed_height = height * 2
-            zoomed_width = width * 2
-            aspect_ratio = zoomed_width / zoomed_height
-            
-            # Calculate figure dimensions to match plot aspect ratios
             plot_height = 6  # Base height in inches
             plot_width = plot_height * aspect_ratio  # Width for each square plot
             
@@ -348,27 +349,82 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
             
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(fig_width, fig_height))
             
-            if show_rgb and show_fft:
-                # RGB + FFT
-                ax1.set_title(r'${\sf image}$', fontsize=14)
-                ax2.set_title(r'$S(\mathbf{q})$', fontsize=14)
-                ax3 = None
-            elif show_grayscale and show_fft:
-                # Grayscale + FFT
-                ax1.set_title(r'${\sf image}$', fontsize=14)
-                ax2.set_title(r'$S(\mathbf{q})$', fontsize=14)
-                ax3 = None
-            else:
-                # Shouldn't happen, but handle it
-                ax3 = None
+            # Left plot - RGB
+            ax1.set_title(f'RGB (dt={dt})', fontsize=14)
             ax1.axis('off')
             ax1.set_aspect('equal')
+            
+            # Right plot - Hidden Channel
+            ax2.set_title(f'Hidden Channel {hidden_channel} (dt={dt})', fontsize=14)
             ax2.axis('off')
             ax2.set_aspect('equal')
+            
+            ax3 = None
             ax_S = None
+        else:
+            # Original layout without hidden channel
+            num_plots = (1 if show_rgb else 0) + (1 if show_grayscale else 0) + (1 if show_fft else 0)
+            
+            if num_plots == 1:
+                # Single plot
+                zoomed_height = height * 2
+                zoomed_width = width * 2
+                aspect_ratio = zoomed_width / zoomed_height
+                
+                # Calculate figure dimensions to match plot aspect ratio
+                plot_height = 8  # Base height in inches
+                plot_width = plot_height * aspect_ratio  # Width for the plot
+                
+                fig, ax1 = plt.subplots(figsize=(plot_width + 0.5, plot_height + 1.5))
+                if show_rgb:
+                    ax1.set_title(r'${\sf image}$', fontsize=14)
+                elif show_grayscale:
+                    ax1.set_title(r'${\sf image}$', fontsize=14)
+                else:  # show_fft only (shouldn't happen, but handle it)
+                    ax1.set_title(fr'$|S(\mathbf{q})|^2$', fontsize=14)
+                ax1.axis('off')
+                ax1.set_aspect('equal')
+                ax2 = None
+                ax3 = None
+                ax_S = None
+            elif num_plots == 2:
+                # Two plots
+                zoomed_height = height * 2
+                zoomed_width = width * 2
+                aspect_ratio = zoomed_width / zoomed_height
+                
+                # Calculate figure dimensions to match plot aspect ratios
+                plot_height = 6  # Base height in inches
+                plot_width = plot_height * aspect_ratio  # Width for each square plot
+                
+                # Total figure dimensions: 2 plots side by side
+                fig_width = plot_width * 2 + 0.8  # Add some space for labels/margins
+                fig_height = plot_height + 1.5  # Add space for titles
+                
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(fig_width, fig_height))
+                
+                if show_rgb and show_fft:
+                    # RGB + FFT
+                    ax1.set_title(r'${\sf image}$', fontsize=14)
+                    ax2.set_title(r'$S(\mathbf{q})$', fontsize=14)
+                    ax3 = None
+                elif show_grayscale and show_fft:
+                    # Grayscale + FFT
+                    ax1.set_title(r'${\sf image}$', fontsize=14)
+                    ax2.set_title(r'$S(\mathbf{q})$', fontsize=14)
+                    ax3 = None
+                else:
+                    # Shouldn't happen, but handle it
+                    ax3 = None
+                ax1.axis('off')
+                ax1.set_aspect('equal')
+                ax2.axis('off')
+                ax2.set_aspect('equal')
+                ax_S = None
     
     im = None
     im_gray = None
+    im_hidden = None
     im_fft = None
     line_S = None
     step = 0
@@ -422,14 +478,14 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
                 
                 s[:] = model(s, dt=dt)
                 
-                # Add noise to RGB channels if noise_strength > 0
+                # Add noise to all channels if noise_strength > 0
                 current_noise = noise_strength_var[0]
                 if current_noise > 0:
                     with torch.no_grad():
-                        # Generate noise for RGB channels (first 3 channels)
+                        # Generate noise for all channels (RGB + hidden channels)
                         # Noise is drawn from uniform distribution [-0.5*ep, +0.5*ep]
-                        noise = (torch.rand_like(s[:, :3, :, :]) - 0.5) * current_noise
-                        s[:, :3, :, :] = s[:, :3, :, :] + noise
+                        noise = (torch.rand_like(s) - 0.5) * current_noise
+                        s = s + noise
                 
                 step += 1
                 
@@ -454,7 +510,9 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
                                            aspect='equal')
                             # Add noise strength annotation
                             current_noise = noise_strength_var[0]
-                            annotation_text = f'Noise: {current_noise:.3f}'
+                            annotation_text = f'Hidden Channels: {num_hidden_channels}'
+                            if current_noise > 0:
+                                annotation_text += f'\nNoise: {current_noise:.3f}'
                             if show_entropy:
                                 annotation_text += f'\nEntropy: {current_compressed_size[0]} bytes'
                             noise_annotation[0] = ax1.annotate(annotation_text, 
@@ -470,7 +528,9 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
                             # Update noise strength annotation
                             if noise_annotation[0] is not None:
                                 current_noise = noise_strength_var[0]
-                                annotation_text = f'Noise: {current_noise:.3f}'
+                                annotation_text = f'Hidden Channels: {num_hidden_channels}'
+                                if current_noise > 0:
+                                    annotation_text += f'\nNoise: {current_noise:.3f}'
                                 if show_entropy:
                                     annotation_text += f'\nEntropy: {current_compressed_size[0]} bytes'
                                 noise_annotation[0].set_text(annotation_text)
@@ -484,7 +544,9 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
                                                           extent=[0, img_zoomed.shape[1], 0, img_zoomed.shape[0]])
                             # Add noise strength annotation
                             current_noise = noise_strength_var[0]
-                            annotation_text = f'Noise: {current_noise:.3f}'
+                            annotation_text = f'Hidden Channels: {num_hidden_channels}'
+                            if current_noise > 0:
+                                annotation_text += f'\nNoise: {current_noise:.3f}'
                             if show_entropy:
                                 annotation_text += f'\nEntropy: {current_compressed_size[0]} bytes'
                             noise_annotation[0] = gray_plot_ax.annotate(annotation_text, 
@@ -501,10 +563,45 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
                             # Update noise strength annotation
                             if noise_annotation[0] is not None:
                                 current_noise = noise_strength_var[0]
-                                annotation_text = f'Noise: {current_noise:.3f}'
+                                annotation_text = f'Hidden Channels: {num_hidden_channels}'
+                                if current_noise > 0:
+                                    annotation_text += f'\nNoise: {current_noise:.3f}'
                                 if show_entropy:
                                     annotation_text += f'\nEntropy: {current_compressed_size[0]} bytes'
                                 noise_annotation[0].set_text(annotation_text)
+                    
+                    # Update hidden channel plot if enabled (always shown with RGB side-by-side)
+                    if show_hidden:
+                        # Extract hidden channel from state tensor
+                        hidden_channel_data = s[0, hidden_channel_idx, :, :].cpu().numpy()
+                        # Normalize to [0, 1] range (state values are typically in [-1, 1])
+                        hidden_channel_data = (hidden_channel_data + 1.0) / 2.0
+                        hidden_channel_data = np.clip(hidden_channel_data, 0, 1)
+                        # Zoom the hidden channel
+                        hidden_channel_zoomed = zoom(hidden_channel_data, 2)
+                        
+                        # Hidden channel is always in ax2 when shown (ax1 is RGB)
+                        hidden_plot_ax = ax2
+                        if im_hidden is None:
+                            im_hidden = hidden_plot_ax.imshow(hidden_channel_zoomed, cmap='gray', aspect='equal',
+                                                              extent=[0, hidden_channel_zoomed.shape[1], 0, hidden_channel_zoomed.shape[0]])
+                            # Add annotation with number of hidden channels
+                            current_noise = noise_strength_var[0]
+                            annotation_text = f'Hidden Channels: {num_hidden_channels}\nChannel: {hidden_channel}'
+                            if current_noise > 0:
+                                annotation_text += f'\nNoise: {current_noise:.3f}'
+                            if show_entropy:
+                                annotation_text += f'\nEntropy: {current_compressed_size[0]} bytes'
+                            # Create separate annotation for hidden channel plot
+                            hidden_annotation = hidden_plot_ax.annotate(annotation_text, 
+                                                                       xy=(0.02, 0.98), xycoords='axes fraction',
+                                                                       fontsize=12, color='white',
+                                                                       bbox=dict(boxstyle='round', facecolor='black', alpha=0.7),
+                                                                       verticalalignment='top')
+                        else:
+                            im_hidden.set_array(hidden_channel_zoomed)
+                            im_hidden.set_extent([0, hidden_channel_zoomed.shape[1], 0, hidden_channel_zoomed.shape[0]])
+                            im_hidden.set_clim(vmin=hidden_channel_zoomed.min(), vmax=hidden_channel_zoomed.max())
                     
                     # Update FFT plot if enabled
                     if show_fft:
@@ -592,9 +689,11 @@ def main():
     parser.add_argument('--structure_fact', type=str, choices=['Sq', 'Sr'], default=None,
                         help='Show S(q) or S(r) plot below FFT. Requires --show_fft. S(q) is angular average of power spectrum, S(r) is angular average of autocorrelation.')
     parser.add_argument('--noise_strength', type=float, default=0.0,
-                        help='Noise strength (ep) for RGB values. After each update, RGB values are changed by random numbers in [-0.5*ep, +0.5*ep]. Default: 0.0 (no noise)')
+                        help='Noise strength (ep) for all channels. After each update, all channel values (RGB + hidden) are changed by random numbers in [-0.5*ep, +0.5*ep]. Default: 0.0 (no noise)')
     parser.add_argument('--show_entropy', action='store_true',
                         help='Compute and display compressed file size (entropy proxy) every 5 frames. Uses zlib compression.')
+    parser.add_argument('--hidden_channel', type=int, default=None,
+                        help='Display specified hidden channel (0-indexed from first hidden channel) as grayscale. Model has 3 RGB channels + hidden channels.')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                         help='Device to use (default: cuda if available, else cpu)')
     
@@ -636,7 +735,7 @@ def main():
     # Run visualization
     print(f"Running visualization...")
     try:
-        visualize_varying_dt(model, device, args.dt, args.height, args.width, args.show_fft, args.show_grayscale, args.structure_fact, args.noise_strength, args.show_entropy)
+        visualize_varying_dt(model, device, args.dt, args.height, args.width, args.show_fft, args.show_grayscale, args.structure_fact, args.noise_strength, args.show_entropy, args.hidden_channel)
     except KeyboardInterrupt:
         print("\n\nProgram interrupted. Exiting...")
         plt.close('all')
