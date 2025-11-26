@@ -112,7 +112,7 @@ def compute_pixel_distance(s1, s2):
 
 
 def run_lyapunov_analysis(model, device, height, width, dx, dy, dt, 
-                          tquench, tevolve, radius, noise_strength, n_runs, show_realtime=False):
+                          tquench, tevolve, radius, noise_strength, n_runs, show_realtime=False, epsilon=0.0):
     """
     Run Lyapunov exponent analysis.
     
@@ -128,6 +128,7 @@ def run_lyapunov_analysis(model, device, height, width, dx, dy, dt,
         noise_strength: Strength of noise in perturbation
         n_runs: Number of independent runs to average over
         show_realtime: If True, display real-time visualization of original and perturbed evolutions
+        epsilon: Per-step noise strength. Same noise is applied to both copies. Default: 0.0 (no noise)
     
     Returns:
         times: Array of time steps after perturbation
@@ -169,6 +170,10 @@ def run_lyapunov_analysis(model, device, height, width, dx, dy, dt,
             s = model.seed(1, height, width).to(device)
             for _ in range(steps_quench):
                 s = model(s, dx=dx, dy=dy, dt=dt)
+                # Apply per-step noise if epsilon > 0
+                if epsilon > 0:
+                    noise = (torch.rand_like(s) - 0.5) * epsilon
+                    s = s + noise
             
             # Step 2: Save state at tquench as s0
             s0 = s.clone()
@@ -231,6 +236,13 @@ def run_lyapunov_analysis(model, device, height, width, dx, dy, dt,
                 # Evolve both states
                 s_unperturbed = model(s_unperturbed, dx=dx, dy=dy, dt=dt)
                 s_perturbed = model(s_perturbed, dx=dx, dy=dy, dt=dt)
+                
+                # Apply per-step noise if epsilon > 0
+                # IMPORTANT: Same noise is applied to both copies
+                if epsilon > 0:
+                    noise = (torch.rand_like(s_unperturbed) - 0.5) * epsilon
+                    s_unperturbed = s_unperturbed + noise
+                    s_perturbed = s_perturbed + noise
                 
                 # Compute pixel-wise distance
                 dist = compute_pixel_distance(s_unperturbed, s_perturbed)
@@ -316,6 +328,8 @@ def main():
                         help='Number of independent runs to average over (default: 10)')
     parser.add_argument('--show_realtime', action='store_true',
                         help='Show real-time visualization of original and perturbed evolutions side-by-side (first run only)')
+    parser.add_argument('--epsilon', type=float, default=0.0,
+                        help='Strength of per-step noise applied to all channels. Same noise is applied to both copies. Default: 0.0 (no noise)')
     parser.add_argument('--output', type=str, default=None,
                         help='Output plot filename (default: auto-generated)')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
@@ -359,6 +373,7 @@ def main():
     print(f"  dx={args.dx}, dy={args.dy}, dt={args.dt}")
     print(f"  tquench={args.tquench}, tevolve={args.tevolve}")
     print(f"  Perturbation: radius={args.radius}, noise_strength={args.noise_strength}")
+    print(f"  Per-step noise (epsilon): {args.epsilon}")
     print(f"  Averaging over {args.n_runs} runs\n")
     
     times, distances = run_lyapunov_analysis(
@@ -366,7 +381,7 @@ def main():
         args.dx, args.dy, args.dt,
         args.tquench, args.tevolve,
         args.radius, args.noise_strength, args.n_runs,
-        args.show_realtime
+        args.show_realtime, args.epsilon
     )
     
     # Check if analysis was terminated early (window closed)

@@ -19,7 +19,7 @@ import zlib
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
+from matplotlib.widgets import Slider, RadioButtons, Button
 
 # Fix for matplotlib compatibility issue
 try:
@@ -242,7 +242,8 @@ def compute_Sr(img):
 
 
 def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=False, show_grayscale=False, 
-                         structure_fact=None, noise_strength=0.0, show_entropy=False, hidden_channel=None):
+                         structure_fact=None, noise_strength=0.0, show_entropy=False, show_hidden=False,
+                         blend_model=None, blend_strength=0.0):
     """
     Visualize NCA dynamics with varying dt (time step) using matplotlib.
     Similar to the "#@title Varying dt" block in the notebook.
@@ -253,7 +254,9 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
         structure_fact: If 'Sq', show S(q) plot below FFT. If 'Sr', show S(r) plot below FFT. If None, show neither.
         noise_strength: If > 0, add noise to all channel values (RGB + hidden) after each update. Noise is drawn from [-0.5*ep, +0.5*ep] where ep is noise_strength.
         show_entropy: If True, compute and display compressed file size (entropy proxy) every 5 frames.
-        hidden_channel: If specified (0-indexed from first hidden channel), display that hidden channel as grayscale. None to disable.
+        show_hidden: If True, display a hidden channel as grayscale alongside RGB. A dropdown allows selecting which channel.
+        blend_model: If not None, a second model to blend with the base model.
+        blend_strength: Blend strength for second model. 0 = only base model, 1 = only blend model.
     """
     model = model.to(device)
     model.eval()
@@ -262,29 +265,24 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
     total_channels = model.chn
     num_hidden_channels = total_channels - 3  # RGB channels are first 3
     
-    # Validate hidden_channel if specified
-    if hidden_channel is not None:
+    # Setup hidden channel visualization
+    # Use a list to allow modification in nested functions
+    selected_hidden_channel = [0]  # Default to first hidden channel (0-indexed)
+    
+    if show_hidden:
         if show_fft:
-            print(f"Warning: Hidden channel visualization is only available in real-space (not with FFT). Ignoring --hidden_channel.")
-            hidden_channel_idx = None
-            # Don't modify hidden_channel here, let the show_hidden logic handle it
-        elif hidden_channel < 0 or hidden_channel >= num_hidden_channels:
-            raise ValueError(f"hidden_channel must be between 0 and {num_hidden_channels - 1} (inclusive). "
-                           f"Model has {total_channels} total channels ({num_hidden_channels} hidden channels).")
+            print(f"Warning: Hidden channel visualization is only available in real-space (not with FFT). Ignoring --show_hidden.")
+            show_hidden = False
         else:
-            # Convert to absolute channel index (hidden channels start at index 3)
-            hidden_channel_idx = hidden_channel + 3
-            print(f"Displaying hidden channel {hidden_channel} (absolute index {hidden_channel_idx})")
             print(f"Model has {total_channels} total channels ({num_hidden_channels} hidden channels)")
-    else:
-        hidden_channel_idx = None
+            print(f"Displaying hidden channel 0 (absolute index 3) by default")
     
     # Setup matplotlib figure with subplots
     plt.ion()  # Turn on interactive mode
     
     # Determine number of plots and which ones to show
     # Hidden channel only shown in real-space (not with FFT), and shows RGB + hidden channel side-by-side
-    show_hidden = hidden_channel is not None and not show_fft  # Only show hidden channel in real-space
+    # show_hidden is already set above (and possibly disabled if show_fft is True)
     show_rgb = not show_grayscale  # Show RGB unless grayscale is enabled (hidden channel doesn't replace RGB)
     show_S_plot = structure_fact is not None and show_fft  # Only show S(q)/S(r) if FFT is also shown
     
@@ -355,7 +353,7 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
             ax1.set_aspect('equal')
             
             # Right plot - Hidden Channel
-            ax2.set_title(f'Hidden Channel {hidden_channel} (dt={dt})', fontsize=14)
+            ax2.set_title(f'Hidden Channel {selected_hidden_channel[0]} (dt={dt})', fontsize=14)
             ax2.axis('off')
             ax2.set_aspect('equal')
             
@@ -465,6 +463,33 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
     
     slider.on_changed(update_noise)
     
+    # Create dropdown (RadioButtons) for hidden channel selection if show_hidden is enabled
+    radio_buttons = None
+    if show_hidden and num_hidden_channels > 0:
+        # Create labels for each hidden channel
+        channel_labels = [str(i) for i in range(num_hidden_channels)]
+        
+        # Position the radio buttons on the right side of the figure
+        ax_radio = plt.axes([0.92, 0.3, 0.07, 0.4])  # [left, bottom, width, height]
+        radio_buttons = RadioButtons(ax_radio, channel_labels, active=0)
+        ax_radio.set_title('Hidden\nChannel', fontsize=10)
+        
+        def update_hidden_channel(label):
+            selected_hidden_channel[0] = int(label)
+            fig.canvas.draw_idle()
+        
+        radio_buttons.on_clicked(update_hidden_channel)
+    
+    # Reset button
+    ax_reset = plt.axes([0.8, 0.06, 0.1, 0.04])
+    button_reset = Button(ax_reset, 'Reset')
+    reset_flag = [False]
+    
+    def on_reset(event):
+        reset_flag[0] = True
+    
+    button_reset.on_clicked(on_reset)
+    
     try:
         with torch.no_grad():
             s = model.seed(1, height, width).to(device)
@@ -476,7 +501,21 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
                     print("\nWindow closed. Exiting...")
                     break
                 
-                s[:] = model(s, dt=dt)
+                # Check for reset
+                if reset_flag[0]:
+                    s = model.seed(1, height, width).to(device)
+                    reset_flag[0] = False
+                
+                # Compute update: blend two models if blend_strength > 0
+                if blend_model is not None and blend_strength > 0:
+                    # new = old + dt * ((1-blend_strength) * update_base + blend_strength * update_blend)
+                    # model(s, dt=1) gives: old + 1 * update, so update = model(s, dt=1) - old
+                    update_base = model(s, dt=1.0) - s
+                    update_blend = blend_model(s, dt=1.0) - s
+                    blended_update = (1 - blend_strength) * update_base + blend_strength * update_blend
+                    s[:] = s + dt * blended_update
+                else:
+                    s[:] = model(s, dt=dt)
                 
                 # Add noise to all channels if noise_strength > 0
                 current_noise = noise_strength_var[0]
@@ -572,6 +611,10 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
                     
                     # Update hidden channel plot if enabled (always shown with RGB side-by-side)
                     if show_hidden:
+                        # Get current selected hidden channel (0-indexed from first hidden channel)
+                        current_hidden_ch = selected_hidden_channel[0]
+                        hidden_channel_idx = current_hidden_ch + 3  # Absolute index (RGB are 0,1,2)
+                        
                         # Extract hidden channel from state tensor
                         hidden_channel_data = s[0, hidden_channel_idx, :, :].cpu().numpy()
                         # Normalize to [0, 1] range (state values are typically in [-1, 1])
@@ -587,7 +630,7 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
                                                               extent=[0, hidden_channel_zoomed.shape[1], 0, hidden_channel_zoomed.shape[0]])
                             # Add annotation with number of hidden channels
                             current_noise = noise_strength_var[0]
-                            annotation_text = f'Hidden Channels: {num_hidden_channels}\nChannel: {hidden_channel}'
+                            annotation_text = f'Hidden Channels: {num_hidden_channels}\nChannel: {current_hidden_ch}'
                             if current_noise > 0:
                                 annotation_text += f'\nNoise: {current_noise:.3f}'
                             if show_entropy:
@@ -602,6 +645,15 @@ def visualize_varying_dt(model, device, dt=0.1, height=128, width=128, show_fft=
                             im_hidden.set_array(hidden_channel_zoomed)
                             im_hidden.set_extent([0, hidden_channel_zoomed.shape[1], 0, hidden_channel_zoomed.shape[0]])
                             im_hidden.set_clim(vmin=hidden_channel_zoomed.min(), vmax=hidden_channel_zoomed.max())
+                            # Update annotation with current channel
+                            if hidden_annotation is not None:
+                                current_noise = noise_strength_var[0]
+                                annotation_text = f'Hidden Channels: {num_hidden_channels}\nChannel: {current_hidden_ch}'
+                                if current_noise > 0:
+                                    annotation_text += f'\nNoise: {current_noise:.3f}'
+                                if show_entropy:
+                                    annotation_text += f'\nEntropy: {current_compressed_size[0]} bytes'
+                                hidden_annotation.set_text(annotation_text)
                     
                     # Update FFT plot if enabled
                     if show_fft:
@@ -692,8 +744,12 @@ def main():
                         help='Noise strength (ep) for all channels. After each update, all channel values (RGB + hidden) are changed by random numbers in [-0.5*ep, +0.5*ep]. Default: 0.0 (no noise)')
     parser.add_argument('--show_entropy', action='store_true',
                         help='Compute and display compressed file size (entropy proxy) every 5 frames. Uses zlib compression.')
-    parser.add_argument('--hidden_channel', type=int, default=None,
-                        help='Display specified hidden channel (0-indexed from first hidden channel) as grayscale. Model has 3 RGB channels + hidden channels.')
+    parser.add_argument('--show_hidden', action='store_true',
+                        help='Display a hidden channel as grayscale alongside RGB. Use dropdown to select which hidden channel.')
+    parser.add_argument('--blend_texture', type=str, default='bubbly_0101',
+                        help='Second texture to blend with (default: bubbly_0101)')
+    parser.add_argument('--blend_strength', type=float, default=0.0,
+                        help='Blend strength for second texture. 0 = only base texture, 1 = only blend texture. Default: 0.0')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                         help='Device to use (default: cuda if available, else cpu)')
     
@@ -728,6 +784,18 @@ def main():
     state_dict = torch.load(model_path, map_location=device)
     model.load_state_dict(state_dict)
     
+    # Load blend model if blend_strength > 0
+    blend_model = None
+    if args.blend_strength > 0:
+        blend_model_path = os.path.join('trained_models', args.model_type, args.blend_texture, 'weights.pt')
+        if not os.path.exists(blend_model_path):
+            raise FileNotFoundError(f"Blend model weights not found: {blend_model_path}")
+        blend_model = get_nca_model(config, args.blend_texture, device)
+        print(f"Loading blend model from: {blend_model_path}")
+        blend_state_dict = torch.load(blend_model_path, map_location=device)
+        blend_model.load_state_dict(blend_state_dict)
+        print(f"Blending {args.texture} with {args.blend_texture} (strength={args.blend_strength})")
+    
     # Validate arguments
     if args.structure_fact is not None and not args.show_fft:
         raise ValueError("--structure_fact requires --show_fft to be enabled")
@@ -735,7 +803,7 @@ def main():
     # Run visualization
     print(f"Running visualization...")
     try:
-        visualize_varying_dt(model, device, args.dt, args.height, args.width, args.show_fft, args.show_grayscale, args.structure_fact, args.noise_strength, args.show_entropy, args.hidden_channel)
+        visualize_varying_dt(model, device, args.dt, args.height, args.width, args.show_fft, args.show_grayscale, args.structure_fact, args.noise_strength, args.show_entropy, args.show_hidden, blend_model, args.blend_strength)
     except KeyboardInterrupt:
         print("\n\nProgram interrupted. Exiting...")
         plt.close('all')
