@@ -77,7 +77,12 @@ export function createDemo(divId) {
         isotropic: true,
 
         texture_name: "bubbly_0101",
+        viewChannel: -1.0,  // -1 = RGB, -2 = grayscale, 0+ = hidden channel
 
+        // Alternate texture for blending
+        altTextureName: "bubbly_0101",
+        altTextureIdx: 0,
+        blendFactor: 0.0,
 
         texture_img: null,
 
@@ -88,6 +93,10 @@ export function createDemo(divId) {
 
     let gui = null;
     let currentTexture = null;
+    let altCurrentTexture = null;
+    let selectingAltTexture = false;
+    let altModels = null;  // Stores the alternate texture's model weights
+    let loadAltModelFn = null;  // Will be set by initMetaData
 
     const initTexture = "bubbly_0101";
 
@@ -131,9 +140,9 @@ export function createDemo(divId) {
         function getTextureImagePath(texture_name) {
             // For blue_spiral, use .jpeg, otherwise try .jpg
             if (texture_name === "blue_spiral") {
-                return "images/texture/" + texture_name + ".jpeg";
+                return "data/images/texture/" + texture_name + ".jpeg";
             }
-            return "images/texture/" + texture_name + ".jpg";
+            return "data/images/texture/" + texture_name + ".jpg";
         }
 
         async function setTextureModel(idx) {
@@ -167,6 +176,23 @@ export function createDemo(divId) {
 
         }
 
+        async function setAltTextureModel(idx) {
+            params.altTextureName = texture_names[idx];
+            params.altTextureIdx = idx;
+            await loadAltModel(idx);
+        }
+
+        async function loadAltModel(idx) {
+            const altModelSet = "data/models/" + texture_names[idx] + ".json";
+            const r = await fetch(altModelSet);
+            altModels = await r.json();
+            if (ca) {
+                ca.setAltWeights(altModels);
+            }
+        }
+        // Make loadAltModel accessible from updateCA
+        loadAltModelFn = loadAltModel;
+
         let len = texture_names.length;
         console.log('Loading', len, 'textures from metadata');
         for (let idx = 0; idx < len; idx++) {
@@ -195,20 +221,36 @@ export function createDemo(divId) {
             img.src = media_path;
             texture.onclick = () => {
                 // removeOverlayIcon();
-                currentTexture.style.borderColor = "white";
-                currentTexture = texture;
-                texture.style.borderColor = "rgb(245 140 44)";
-                if (!window.matchMedia('(min-width: 500px)').matches && navigator.userAgent.includes("Chrome")) {
-                    texture.scrollIntoView({behavior: "smooth", block: "nearest", inline: "center"})
+                console.log('Texture clicked, selectingAltTexture:', selectingAltTexture, 'idx:', idx);
+                if (selectingAltTexture) {
+                    // Selecting alternate texture (green border)
+                    console.log('Selecting alt texture');
+                    if (altCurrentTexture) {
+                        altCurrentTexture.style.borderColor = altCurrentTexture === currentTexture ? "rgb(245 140 44)" : "white";
+                    }
+                    altCurrentTexture = texture;
+                    texture.style.borderColor = "rgb(76 175 80)";  // Green
+                    setAltTextureModel(idx);
+                } else {
+                    // Selecting primary texture (orange border)
+                    if (currentTexture) {
+                        currentTexture.style.borderColor = currentTexture === altCurrentTexture ? "rgb(76 175 80)" : "white";
+                    }
+                    currentTexture = texture;
+                    texture.style.borderColor = "rgb(245 140 44)";  // Orange
+                    if (!window.matchMedia('(min-width: 500px)').matches && navigator.userAgent.includes("Chrome")) {
+                        texture.scrollIntoView({behavior: "smooth", block: "nearest", inline: "center"})
+                    }
+                    setTextureModel(idx);
                 }
-                setTextureModel(idx);
             };
             let gridBox = $('#texture');
 
 
             if (texture_name == initTexture) {
                 currentTexture = texture;
-                texture.style.borderColor = "rgb(245 140 44)";
+                altCurrentTexture = texture;  // Default alt texture to same as primary
+                texture.style.borderColor = "rgb(245 140 44)";  // Orange for primary (shown since blend=0)
                 gridBox.prepend(texture);
 
             } else {
@@ -272,8 +314,29 @@ export function createDemo(divId) {
 
         ca.clearCircle(0, 0, 1000);
         ca.alignment = params.alignment;
-        ca.rotationAngle = params.rotationAngle
+        ca.rotationAngle = params.rotationAngle;
+        ca.blendFactor = params.blendFactor;
 
+        // Populate channel selector with hidden channels
+        populateChannelSelector();
+    }
+
+    function populateChannelSelector() {
+        const select = $('#channelSelect');
+        // Remove existing hidden channel options (keep RGB and grayscale)
+        while (select.options.length > 2) {
+            select.remove(2);
+        }
+        // Add hidden channel options (channels 3 to channelCount-1)
+        if (ca && ca.channelCount) {
+            const numHidden = ca.channelCount - 3;  // subtract RGB channels
+            for (let i = 0; i < numHidden; i++) {
+                const option = document.createElement('option');
+                option.value = (3 + i).toString();  // channel index starts at 3
+                option.text = `Hidden ${i + 1}`;
+                select.add(option);
+            }
+        }
     }
 
 
@@ -488,6 +551,36 @@ export function createDemo(divId) {
         $('#scaling_mode').onchange = updateDx;
         $('#scaling_mode').oninput = updateDx;
 
+        // Blend factor slider
+        const updateBlendFactor = () => {
+            const val = parseFloat($('#blendFactor').value);
+            $('#blendFactorLabel').textContent = val.toFixed(2);
+            params.blendFactor = val;
+            if (ca) {
+                ca.blendFactor = val;
+            }
+        };
+        $('#blendFactor').onchange = updateBlendFactor;
+        $('#blendFactor').oninput = updateBlendFactor;
+
+        // Alt texture checkbox - toggles which texture is being selected
+        $('#altTexture').onchange = () => {
+            selectingAltTexture = $('#altTexture').checked;
+            console.log('Alt texture mode:', selectingAltTexture);
+        };
+
+        // Channel view selector
+        $('#channelSelect').onchange = () => {
+            const val = $('#channelSelect').value;
+            if (val === 'rgb') {
+                params.viewChannel = -1.0;
+            } else if (val === 'grayscale') {
+                params.viewChannel = -2.0;
+            } else {
+                // Hidden channel: value is the channel index (3, 4, 5, ...)
+                params.viewChannel = parseFloat(val);
+            }
+        };
 
         $('#zoomIn').onclick = () => {
             if (params.zoom < maxZoom) {
@@ -536,6 +629,11 @@ export function createDemo(divId) {
         const models = await r.json();
         params.models = models;
         createCA();
+
+        // Load alternate model (default to same as primary initially)
+        if (loadAltModelFn) {
+            await loadAltModelFn(params.altTextureIdx);
+        }
 
         window.ca = ca;
         if (firstTime) {
@@ -604,7 +702,7 @@ export function createDemo(divId) {
         lastDrawTime = time;
 
         twgl.bindFramebufferInfo(gl);
-        ca.draw(params.zoom);
+        ca.draw(params.zoom, params.viewChannel);
         requestAnimationFrame(render);
     }
 }

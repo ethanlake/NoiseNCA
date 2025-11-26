@@ -461,15 +461,35 @@ const PROGRAMS = {
         update = u_update_readUV(uv);    
         // }
       #endif
-      if (u_epsilon > 0.0) {
-        update += (hash44(vec4(xy, ch, u_seed)) - 0.5) * u_epsilon;
-      }
-      setOutput(state + update * u_dt);
+      highp vec4 noise = (hash44(vec4(xy, ch, u_seed)) - 0.5) * u_epsilon;  // uniform on [-ε/2, ε/2]
+      highp vec4 newState = state + u_dt * ((1.0 - u_epsilon) * update + noise);
+      setOutput(newState);
+    }`,
+    blendedUpdate: `
+    ${defInput('u_update')}
+    ${defInput('u_altUpdate')}
+    uniform float u_seed, u_updateProbability, u_epsilon;
+    uniform float u_dt;
+    uniform float u_blendFactor;
+    varying vec2 uv;
+
+    void main() {
+      vec2 xy = getOutputXY();
+      float ch = getOutputChannel();
+      highp vec4 state = u_input_read(xy, ch);
+      highp vec4 update1 = u_update_readUV(uv);
+      highp vec4 update2 = u_altUpdate_readUV(uv);
+      // Blend the two updates: (1-blend)*update1 + blend*update2
+      highp vec4 blendedUpdate = mix(update1, update2, u_blendFactor);
+      highp vec4 noise = (hash44(vec4(xy, ch, u_seed)) - 0.5) * u_epsilon;  // uniform on [-ε/2, ε/2]
+      highp vec4 newState = state + u_dt * ((1.0 - u_epsilon) * blendedUpdate + noise);
+      setOutput(newState);
     }`,
     vis: `
     uniform float u_raw;
     uniform float u_zoom;
     uniform float u_perceptionCircle, u_arrows;
+    uniform float u_viewChannel;  // -1 = RGB, -2 = grayscale, 0+ = hidden channel index
     varying vec2 uv;
 
     float clip01(float x) {
@@ -552,8 +572,27 @@ const PROGRAMS = {
 
             vec3 cellRGB = clamp(u_input_read(xy, 0.0).rgb + 0.5, 0.0, 1.0);
 
+            vec3 rgb;
+            if (u_viewChannel < -1.5) {
+                // Grayscale mode: average of RGB
+                float gray = (cellRGB.r + cellRGB.g + cellRGB.b) / 3.0;
+                rgb = vec3(gray);
+            } else if (u_viewChannel < -0.5) {
+                // RGB mode (default)
+                rgb = cellRGB;
+            } else {
+                // Hidden channel mode: show specific channel as grayscale
+                float chIdx = floor(u_viewChannel + 0.5);
+                float ch4 = floor(chIdx / 4.0);
+                float chOffset = mod(chIdx, 4.0);
+                vec4 channelData = u_input_read01(xy, ch4);
+                float val = getElement(channelData, chOffset);
+                val = clamp(val + 0.5, 0.0, 1.0);
+                rgb = vec3(val);
+            }
             
-            vec3 rgb = cellRGB;
+            vec3 cellRGBOriginal = cellRGB;
+            cellRGB = rgb;
             if (3.0 < u_zoom) {
                 vec2 dir = getCellDirection(floor(xy)+0.5);
                 float s = dir.x, c = dir.y;
@@ -570,7 +609,7 @@ const PROGRAMS = {
                     if (ch < 3.0) {
                         vec3 i3 = onehot3(ch);
                         barColor = i3;
-                        barLengh = dot(cellRGB, i3);
+                        barLengh = dot(cellRGBOriginal, i3);
                     } else {
                         vec4 v4 = u_input_read01(xy, floor(ch/4.0));
                         barLengh = getElement(v4, mod(ch, 4.0));
@@ -725,10 +764,13 @@ export class NoiseNCA {
         this.arrowsCoef = 0.0;
         this.visMode = 'color';
         this.hexGrid = false;
+        this.viewChannel = -1.0;  // -1 = RGB, -2 = grayscale, 0+ = hidden channel index
 
         this.noise_level = models.noise_level;
 
         this.layers = [];
+        this.altLayers = [];  // Alternate texture weights for blending
+        this.blendFactor = 0.0;  // 0 = primary only, 1 = alt only, 0.5 = equal blend
         this.setWeights(models);
 
         const defs = (this.circular_padding ? '#define CIRCULAR_PADDING\n' : '') +
@@ -815,6 +857,7 @@ export class NoiseNCA {
         const perception_n = this.layers[0].in_n;
         const lastLayer = this.layers[this.layers.length - 1];
         const channel_n = lastLayer.out_n;
+        this.channelCount = channel_n;  // Store for external access
         const stateQuantization = lastLayer.quantScaleZero;
         const no_quantization = [1.0, 0.0];
         this.buf = {
@@ -833,7 +876,11 @@ export class NoiseNCA {
             const layer = this.layers[i];
             // this.buf[`layer${i}`] = createTensor(gl, gridW, updateH, layer.out_n, layer.quantScaleZero, false);
             this.buf[`layer${i}`] = createTensor(gl, gridW, updateH, layer.out_n, no_quantization, true);
+            // Alternate texture layer buffers
+            this.buf[`altLayer${i}`] = createTensor(gl, gridW, updateH, layer.out_n, no_quantization, true);
         }
+        // Buffer for alternate texture's final update
+        this.buf.altUpdate = createTensor(gl, gridW, updateH, channel_n, no_quantization, true);
     }
 
     step(stage) {
@@ -860,18 +907,44 @@ export class NoiseNCA {
 
         let inputBuf = this.buf.perception0;
 
+        // Compute primary texture update
         for (let i = 0; i < this.layers.length; ++i) {
             if (stage == 'all' || stage == `FC Layer${i + 1}`)
                 var relu = i == 0 ? true : false;
             this.runDense(this.buf[`layer${i}`], inputBuf, this.layers[i], relu, seed);
             inputBuf = this.buf[`layer${i}`];
         }
+        
+        // Compute alternate texture update if we have alt weights and blending
+        const hasAltLayers = this.altLayers && this.altLayers.length > 0 && this.altLayers.every(l => l.ready);
+        let altInputBuf = this.buf.perception0;
+        
+        if (hasAltLayers && this.blendFactor > 0) {
+            for (let i = 0; i < this.altLayers.length; ++i) {
+                if (stage == 'all' || stage == `FC Layer${i + 1}`)
+                    var relu = i == 0 ? true : false;
+                this.runDense(this.buf[`altLayer${i}`], altInputBuf, this.altLayers[i], relu, seed);
+                altInputBuf = this.buf[`altLayer${i}`];
+            }
+        }
+        
         if (stage == 'all' || stage == 'Update') {
-            this.runLayer(this.progs.update, this.buf.newState, {
-                u_input: this.buf.state, u_update: inputBuf,
-                u_unshuffleTex: this.unshuffleTex, u_dt: this.dt, u_epsilon: this.epsilon,
-                u_seed: seed, u_updateProbability: this.updateProbability
-            });
+            if (hasAltLayers && this.blendFactor > 0) {
+                // Use blended update shader
+                this.runLayer(this.progs.blendedUpdate, this.buf.newState, {
+                    u_input: this.buf.state, u_update: inputBuf, u_altUpdate: altInputBuf,
+                    u_unshuffleTex: this.unshuffleTex, u_dt: this.dt, u_epsilon: this.epsilon,
+                    u_seed: seed, u_updateProbability: this.updateProbability,
+                    u_blendFactor: this.blendFactor
+                });
+            } else {
+                // Use regular update shader (no blending)
+                this.runLayer(this.progs.update, this.buf.newState, {
+                    u_input: this.buf.state, u_update: inputBuf,
+                    u_unshuffleTex: this.unshuffleTex, u_dt: this.dt, u_epsilon: this.epsilon,
+                    u_seed: seed, u_updateProbability: this.updateProbability
+                });
+            }
         }
 
         if (stage == 'all') {
@@ -959,14 +1032,20 @@ export class NoiseNCA {
             u_zoom: zoom,
             u_seed: u_seed,
             u_control: false,
-            u_noise_level: this.noise_level,
+            u_noise_level: 1.0,
         });
     }
 
     setWeights(models) {
         const gl = this.gl;
-        this.layers.forEach(layer => gl.deleteTexture(layer));
+        this.layers.forEach(layer => { if (layer.tex) gl.deleteTexture(layer.tex); });
         this.layers = models.layers.map(layer => createDenseInfo(gl, layer));
+    }
+
+    setAltWeights(models) {
+        const gl = this.gl;
+        this.altLayers.forEach(layer => { if (layer.tex) gl.deleteTexture(layer.tex); });
+        this.altLayers = models.layers.map(layer => createDenseInfo(gl, layer));
     }
 
     runLayer(program, output, inputs) {
@@ -1005,9 +1084,10 @@ export class NoiseNCA {
         });
     }
 
-    draw(zoom) {
+    draw(zoom, viewChannel) {
         const gl = this.gl;
         zoom = zoom || 1.0;
+        viewChannel = viewChannel !== undefined ? viewChannel : -1.0;  // default RGB
 
         gl.useProgram(this.progs.vis.program);
         twgl.setBuffersAndAttributes(gl, this.progs.vis, this.quad);
@@ -1018,6 +1098,7 @@ export class NoiseNCA {
             u_perceptionCircle: this.perceptionCircle,
             u_arrows: this.arrowsCoef,
             u_hexGrid: this.hexGrid,
+            u_viewChannel: viewChannel,
         };
         let inputBuf = this.buf.state;
         if (this.visMode != 'color') {

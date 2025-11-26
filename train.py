@@ -14,7 +14,7 @@ from models import NCA, NoiseNCA, PENCA
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--config', type=str, default='configs/Noise-NCA.yml', help="Path to the config file")
-parser.add_argument('--data_dir', type=str, default='data/textures/', help="Texture images directory")
+parser.add_argument('--data_dir', type=str, default='data/images/texture/', help="Texture images directory")
 
 os.environ["WANDB_SILENT"] = "true"
 

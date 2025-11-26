@@ -136,19 +136,19 @@
                                 <use xlink:href="#zoomOutIcon"></use>
                             </svg>
 
-                            <span id="record">
-                                <img id="record_off" src="images/record_off.png" width="40px" height="40px"
+                            <span id="record" style="display: none;">
+                                <img id="record_off" src="data/images/record_off.png" width="40px" height="40px"
                                     style="padding: 4px; padding-bottom: 2px" />
-                                <img id="record_on" src="images/record_on.png" width="40px" height="40px"
+                                <img id="record_on" src="data/images/record_on.png" width="40px" height="40px"
                                     style="padding: 4px; padding-bottom: 2px; display: none;" />
                             </span>
 
                             <!--                        <label>-->
-                            <!--                            <img id="screenshot" src="images/screenshot.png" width="30px" height="30px"/>-->
+                            <!--                            <img id="screenshot" src="data/images/screenshot.png" width="30px" height="30px"/>-->
                             <!--                        </label>-->
 
                             <!--                            <label><img id="benchmark"-->
-                            <!--                                        src="images/benchmark.png" width="50px" height="50px"/></label>-->
+                            <!--                                        src="data/images/benchmark.png" width="50px" height="50px"/></label>-->
 
                         </div>
                         <div class="speed">
@@ -190,15 +190,15 @@
 
                         <div id='brushSelect' class="button-group">
                             <label>
-                                <input type="radio" name="brush"><img src="images/brush_S.png" width="38px"
+                                <input type="radio" name="brush"><img src="data/images/brush_S.png" width="38px"
                                     height="38px" />
                             </label>
                             <label>
-                                <input type="radio" name="brush"><img src="images/brush_M.png" width="38px"
+                                <input type="radio" name="brush"><img src="data/images/brush_M.png" width="38px"
                                     height="38px" />
                             </label>
                             <label>
-                                <input type="radio" name="brush" checked="checked"><img src="images/brush_L.png"
+                                <input type="radio" name="brush" checked="checked"><img src="data/images/brush_L.png"
                                     width="38px" height="38px" />
                             </label>
                             <br> Brush Size
@@ -207,36 +207,44 @@
 
                         <div>
                             <input type="range" id="dt" min="0.01" max="1.0" step="0.01" value="1.0"></br>$\Delta t = $
-                            <label id="dtLabel"></label><br>
+                            <label id="dtLabel"></label>
 
                             <input type="range" id="epsilon" min="0.0" max="1.0" step="0.001" value="0.0"></br>$\epsilon = $
-                            <label id="epsilonLabel"></label><br>
-                            
-
-
+                            <label id="epsilonLabel"></label>
                         </div>
 
+                        <div id="viewChannelSelect" class="button-group" style="text-align: center;">
+                            <select id="channelSelect" style="padding: 4px; font-size: 12px;">
+                                <option value="rgb">RGB</option>
+                                <option value="grayscale">Grayscale</option>
+                            </select>
+                            <br>View Channel
+                        </div>
+
+                        <div>
+                            <!-- Empty placeholder for grid alignment -->
+                        </div>
 
                         <div id='alignSelect' class="button-group">
                             <label>
                                 <input type="radio" checked="checked" name="align"><img
-                                    src="images/icons.svg#alignRegular" />
+                                    src="data/images/icons.svg#alignRegular" />
                             </label>
                             <label>
-                                <input type="radio" name="align"><img src="images/icons.svg#alignPolar" />
+                                <input type="radio" name="align"><img src="data/images/icons.svg#alignPolar" />
                             </label>
                             <label>
-                                <input type="radio" name="align"><img src="images/icons.svg#alignDipole" />
+                                <input type="radio" name="align"><img src="data/images/icons.svg#alignDipole" />
                             </label>
                             <br>Cell Alignment
                         </div>
                         <!--                        <div id='configSelect' class="button-group">-->
                         <!--                            <label>-->
                         <!--                                <input type="radio" name="config"><img-->
-                        <!--                                    src="images/config_S.png" width="38px" height="38px"/>-->
+                        <!--                                    src="data/images/config_S.png" width="38px" height="38px"/>-->
                         <!--                            </label>-->
                         <!--                            <label>-->
-                        <!--                                <input type="radio" name="config" checked="checked"><img src="images/config_L.png"-->
+                        <!--                                <input type="radio" name="config" checked="checked"><img src="data/images/config_L.png"-->
                         <!--                                                                                         width="38px"-->
                         <!--                                                                                         height="38px"/>-->
                         <!--                            </label>-->
@@ -251,10 +259,10 @@
                         </div>
                         <!--            <div id='RotPosEmb' class="button-group">-->
                         <!--                <label>-->
-                        <!--                    <input type="radio" checked="checked" name="rpe"><img src="images/icons.svg#gridSquare"/>-->
+                        <!--                    <input type="radio" checked="checked" name="rpe"><img src="data/images/icons.svg#gridSquare"/>-->
                         <!--                </label>-->
                         <!--                <label>-->
-                        <!--                    <input type="radio" name="grid" id='nrpe'><img src="images/icons.svg#gridHex"/>-->
+                        <!--                    <input type="radio" name="grid" id='nrpe'><img src="data/images/icons.svg#gridHex"/>-->
                         <!--                </label>-->
                         <!--                <br>Rotate Positional <br>Embedding-->
                         <!--            </div>-->
@@ -262,7 +270,7 @@
                     <br>
                     <div id="demo-tip">
 
-                        <img id="pointer" src="images/pointer.svg">
+                        <img id="pointer" src="data/images/pointer.svg">
                         <div class="hint ">
                             Click or tap the image to erase parts of the pattern.
 
@@ -301,6 +309,16 @@
                     <div id="texture" class="pattern-selector">
                         <!-- a hacky way to add some padding, so the fadeout doesn't cover items in the scroll. -->
                         <div class="whitespace"></div>
+                    </div>
+
+                    <div style="text-align: center; padding: 8px; grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; gap: 20px;">
+                        <label style="cursor: pointer;">
+                            <input type="checkbox" id="altTexture"> Alt. Texture
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            Blend Factor: <input type="range" id="blendFactor" min="0" max="1" step="0.01" value="0" style="width: 100px;">
+                            <span id="blendFactorLabel">0.00</span>
+                        </label>
                     </div>
 
                     <!--                    <div class="motion-overlay overlaygrad" id="motion_overlay_grad">-->
